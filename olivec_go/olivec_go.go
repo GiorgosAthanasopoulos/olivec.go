@@ -1,5 +1,7 @@
 package olivec_go
 
+import "unsafe"
+
 const OLIVEC_AA_RES = 2
 
 func OlivecSwap(a, b *int) {
@@ -29,10 +31,10 @@ const OlivecDefaultFontWidth = 6
 
 type OlivecFont struct {
 	width, height uint
-	glyphs        *[128][OlivecDefaultFontHeight][OlivecDefaultFontWidth]rune
+	glyphs        *[128][OlivecDefaultFontHeight][OlivecDefaultFontWidth]byte
 }
 
-var OlivecDefaultGlyphs = [128][OlivecDefaultFontHeight][OlivecDefaultFontWidth]rune{
+var OlivecDefaultGlyphs = [128][OlivecDefaultFontHeight][OlivecDefaultFontWidth]byte{
 	'a': {
 		{0, 0, 0, 0, 0},
 		{0, 1, 1, 0, 0},
@@ -934,6 +936,324 @@ func OlivecBarycentric(x1, y1, x2, y2, x3, y3, xp, yp int, u1, u2, det *int) boo
 	return (OlivecSign(*u1) == OlivecSign(*det) || *u1 == 0) && (OlivecSign(*u2) == OlivecSign(*det) || *u2 == 0) && (OlivecSign(u3) == OlivecSign(*det) || u3 == 0)
 }
 
-func OlivecNormalizeTriangle(width, height, uint, x1, y1, x2, y2, x3, y3 int, lx, hx, ly, hy, *int) bool {
+func OlivecNormalizeTriangle(width, height uint, x1, y1, x2, y2, x3, y3 int, lx, hx, ly, hy *int) bool {
+	*lx = x1
+	*hx = x1
+	if *lx > x2 {
+		*lx = x2
+	}
+	if *lx > x3 {
+		*lx = x3
+	}
+	if *hx < x2 {
+		*hx = x2
+	}
+	if *hx < x3 {
+		*hx = x3
+	}
+	if *lx < 0 {
+		*lx = 0
+	}
+	if uint(*lx) >= width {
+		return false
+	}
+	if *hx < 0 {
+		return false
+	}
+	if uint(*hx) >= width {
+		*hx = int(width) - 1
+	}
 
+	*ly = y1
+	*hy = y1
+	if *ly > y2 {
+		*ly = y2
+	}
+	if *ly > y3 {
+		*ly = y3
+	}
+	if *hy < y2 {
+		*hy = y2
+	}
+
+	if *hy < y3 {
+		*hy = y3
+	}
+	if *ly < 0 {
+		*ly = 0
+	}
+	if uint(*ly) >= height {
+		return false
+	}
+	if *hy < 0 {
+		return false
+	}
+	if uint(*hy) >= height {
+		*hy = int(height) - 1
+	}
+
+	return true
+}
+
+func OlivecTriangle3c(oc *OlivecCanvas, x1, y1, x2, y2, x3, y3 int, c1, c2, c3 uint32) {
+	var lx, hx, ly, hy int
+	if OlivecNormalizeTriangle(oc.width, oc.height, x1, y1, x2, y2, x3, y3, &lx, &hx, &ly, &hy) {
+		for y := ly; y <= hy; y++ {
+			for x := lx; x <= hx; x++ {
+				var u1, u2, det int
+				if OlivecBarycentric(x1, y1, x2, y2, x3, y3, x, y, &u1, &u2, &det) {
+					OlivecBlendColor(OlivecPixel(oc, uint(x), uint(y)), MixColors3(c1, c2, c3, u1, u2, det))
+				}
+			}
+		}
+	}
+}
+
+func OlivecTriangle3z(oc *OlivecCanvas, x1, y1, x2, y2, x3, y3 int, z1, z2, z3 float32) {
+	var lx, hx, ly, hy int
+	if OlivecNormalizeTriangle(oc.width, oc.height, x1, y1, x2, y2, x3, y3, &lx, &hx, &ly, &hy) {
+		for y := ly; y <= hy; y++ {
+			for x := lx; x <= hy; x++ {
+				var u1, u2, det int
+				if OlivecBarycentric(x1, y1, x2, y2, x3, y3, x, y, &u1, &u2, &det) {
+					z := z1*float32(u1)/float32(det) + z2*float32(u2)/float32(det) + z3*(float32(det)-float32(u1)-float32(u2))/float32(det)
+					*OlivecPixel(oc, uint(x), uint(y)) = uint32(z)
+				}
+			}
+		}
+	}
+}
+
+func OlivecTriangle3uv(oc *OlivecCanvas, x1, y1, x2, y2, x3, y3 int, tx1, ty1, tx2, ty2, tx3, ty3, z1, z2, z3 float32, texture *OlivecCanvas) {
+	var lx, hx, ly, hy int
+	if OlivecNormalizeTriangle(oc.width, oc.height, x1, y1, x2, y2, x3, y3, &lx, &hx, &ly, &hy) {
+		for y := ly; y <= hy; y++ {
+			for x := lx; x <= hx; x++ {
+				var u1, u2, det int
+				if OlivecBarycentric(x1, y1, x2, y2, x3, y3, x, y, &u1, &u2, &det) {
+					u3 := det - u1 - u2
+					z := z1*float32(u1)/float32(det) + z2*float32(u2)/float32(det) + z3*(float32(det-u1-u2))/float32(det)
+					tx := tx1*float32(u1)/float32(det) + tx2*float32(u2)/float32(det) + tx3*float32(u3)/float32(det)
+					ty := ty1*float32(u1)/float32(det) + ty2*float32(u2)/float32(det) + ty3*float32(u3)/float32(det)
+
+					texture_x := int(tx / z * float32(texture.width))
+					if texture_x < 0 {
+						texture_x = 0
+					}
+					if uint(texture_x) >= texture.width {
+						texture_x = int(texture.width) - 1
+					}
+
+					texture_y := int(ty / z * float32(texture.height))
+					if texture_y < 0 {
+						texture_y = 0
+					}
+					if uint(texture_y) >= texture.height {
+						texture_y = int(texture.height) - 1
+					}
+					*OlivecPixel(oc, uint(x), uint(y)) = *OlivecPixel(texture, uint(texture_x), uint(texture_y))
+				}
+			}
+		}
+	}
+}
+
+func OlivecTriangle3uvBilinear(oc *OlivecCanvas, x1, y1, x2, y2, x3, y3 int, tx1, ty1, tx2, ty2, tx3, ty3, z1, z2, z3 float32, texture *OlivecCanvas) {
+	var lx, hx, ly, hy int
+	if OlivecNormalizeTriangle(oc.width, oc.height, x1, y1, x2, y2, x3, y3, &lx, &hx, &ly, &hy) {
+		for y := ly; y <= hy; y++ {
+			for x := lx; x <= hx; x++ {
+				var u1, u2, det int
+				if OlivecBarycentric(x1, y1, x2, y2, x3, y3, x, y, &u1, &u2, &det) {
+					u3 := det - u1 - u2
+					z := z1*float32(u1)/float32(det) + z2*float32(u2)/float32(det) + z3*(float32(det-u1-u2))/float32(det)
+					tx := tx1*float32(u1)/float32(det) + tx2*float32(u2)/float32(det) + tx3*float32(u3)/float32(det)
+					ty := ty1*float32(u1)/float32(det) + ty2*float32(u2)/float32(det) + ty3*float32(u3)/float32(det)
+
+					texture_x := tx / z * float32(texture.width)
+					if texture_x < 0 {
+						texture_x = 0
+					}
+					if texture_x >= float32(texture.width) {
+						texture_x = float32(texture.width) - 1
+					}
+
+					texture_y := ty / z * float32(texture.height)
+					if texture_y < 0 {
+						texture_y = 0
+					}
+					if texture_y >= float32(texture.height) {
+						texture_y = float32(texture.height) - 1
+					}
+					precision := 100
+					*OlivecPixel(oc, uint(x), uint(y)) = OlivecPixelBilinear(texture, int(texture_x)*precision, int(texture_y)*precision, precision, precision)
+				}
+			}
+		}
+	}
+}
+
+func OlivecTriangle(oc *OlivecCanvas, x1, y1, x2, y2, x3, y3 int, color uint32) {
+	var lx, hx, ly, hy int
+	for y := ly; y <= hy; y++ {
+		for x := lx; x <= hx; x++ {
+			var u1, u2, det int
+			if OlivecBarycentric(x1, y1, x2, y2, x3, y3, x, y, &u1, &u2, &det) {
+				OlivecBlendColor(OlivecPixel(oc, uint(x), uint(y)), color)
+			}
+		}
+	}
+}
+
+func OlivecText(oc *OlivecCanvas, text string, tx, ty int, font *OlivecFont, glyphSize uint, color uint32) {
+	for i := 0; text[i] != 0; i++ {
+		gx := tx + i*int(font.width)*int(glyphSize)
+		gy := ty
+
+		firstCharAscii := int(text[0])
+		sizeofChar := unsafe.Sizeof(byte(0))
+		glyph := &font.glyphs[firstCharAscii*int(sizeofChar)*int(font.width)*int(font.height)]
+		for dy := 0; uint(dy) < font.height; dy++ {
+			for dx := 0; uint(dx) < font.width; dx++ {
+				px := gx + dx*int(glyphSize)
+				py := gy + dy*int(glyphSize)
+				if 0 <= px && px < int(oc.width) && 0 <= py && py < int(oc.height) {
+					// FIXME: remove [0] from glyph array access
+					if glyph[dy*int(font.width)+dx][0] != 0 {
+						OlivecRect(oc, px, py, int(glyphSize), int(glyphSize), color)
+					}
+				}
+			}
+		}
+	}
+}
+
+func OlivecSpriteBlend(oc *OlivecCanvas, x, y, w, h int, sprite *OlivecCanvas) {
+	if sprite.width == 0 {
+		return
+	}
+	if sprite.height == 0 {
+		return
+	}
+
+	nr := &OlivecNormalizedRect{}
+	if !OlivecNormalizeRect(x, y, w, h, oc.width, oc.height, nr) {
+		return
+	}
+
+	xa := nr.ox1
+	if w < 0 {
+		xa = nr.ox2
+	}
+	ya := nr.oy1
+	if h < 0 {
+		ya = nr.oy2
+	}
+	for y := nr.y1; y <= nr.y2; y++ {
+		for x := nr.x1; x <= nr.x2; x++ {
+			nx := uint((x - xa) * (int(sprite.width)) / w)
+			ny := uint((y - ya) * (int(sprite.height)) / h)
+			OlivecBlendColor(OlivecPixel(oc, uint(x), uint(y)), *OlivecPixel(sprite, nx, ny))
+		}
+	}
+}
+
+func OlivecSpriteCopy(oc *OlivecCanvas, x, y, w, h int, sprite *OlivecCanvas) {
+	if sprite.width == 0 {
+		return
+	}
+	if sprite.height == 0 {
+		return
+	}
+
+	nr := &OlivecNormalizedRect{}
+	if !OlivecNormalizeRect(x, y, w, h, oc.width, oc.height, nr) {
+		return
+	}
+
+	xa := nr.ox1
+	if w < 0 {
+		xa = nr.ox2
+	}
+	ya := nr.oy1
+	if h < 0 {
+		ya = nr.oy2
+	}
+	for y := nr.y1; y <= nr.y2; y++ {
+		for x := nr.x1; x <= nr.x2; x++ {
+			nx := uint((x - xa) * (int(sprite.width)) / w)
+			ny := uint((y - ya) * (int(sprite.height)) / h)
+			*OlivecPixel(oc, uint(x), uint(y)) = *OlivecPixel(sprite, nx, ny)
+		}
+	}
+}
+
+func OlivecPixelBilinear(sprite *OlivecCanvas, nx, ny, w, h int) uint32 {
+	px := nx % w
+	py := ny % h
+
+	x1 := nx / w
+	x2 := nx / w
+	y1 := ny / h
+	y2 := ny / h
+	if px < w/2 {
+		px += w / 2
+		x1 -= 1
+		if x1 < 0 {
+			x1 = 0
+		}
+	} else {
+		px -= w / 2
+		x2 += 1
+		if uint(x2) >= sprite.width {
+			x2 = int(sprite.width) - 1
+		}
+	}
+
+	if py < h/2 {
+		py += h / 2
+		y1 -= 1
+		if y1 < 0 {
+			y1 = 0
+		}
+
+	} else {
+		py -= h / 2
+		y2 += 1
+		if uint(y2) >= sprite.height {
+			y2 = int(sprite.height) - 1
+		}
+
+	}
+
+	return MixColors2(MixColors2(*OlivecPixel(sprite, uint(x1), uint(y1)),
+		*OlivecPixel(sprite, uint(x2), uint(y1)),
+		px, w),
+
+		MixColors2(*OlivecPixel(sprite, uint(x1), uint(y2)),
+			*OlivecPixel(sprite, uint(x2), uint(y2)),
+			px, w),
+		py, h)
+}
+
+func OlivecSpriteCopyBilinear(oc *OlivecCanvas, x, y, w, h int, sprite *OlivecCanvas) {
+	if w <= 0 {
+		return
+	}
+	if h <= 0 {
+		return
+	}
+
+	nr := &OlivecNormalizedRect{}
+	if !OlivecNormalizeRect(x, y, w, h, oc.width, oc.height, nr) {
+		return
+	}
+
+	for y := nr.y1; y <= nr.y2; y++ {
+		for x := nr.x1; x <= nr.x2; x++ {
+			nx := uint(x-nr.ox1) * sprite.width
+			ny := uint(y-nr.oy1) * sprite.height
+			*OlivecPixel(oc, uint(x), uint(y)) = OlivecPixelBilinear(sprite, int(nx), int(ny), w, h)
+		}
+	}
 }
